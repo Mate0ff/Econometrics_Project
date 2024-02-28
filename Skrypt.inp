@@ -1,0 +1,178 @@
+# statstyki opisowe
+summary Y X1 X2 X3 X4 X5
+
+# macierz korelacji
+corr Y X1 X2 X3 X4 X5
+
+# model podstawowy
+ols Y const X1 X2 X3 X4 X5
+
+#metoda hellwiga z zajęć
+
+list x = X1 X2 X3 X4 X5 
+#==================================================================
+#==================================================================
+
+
+function matrix R_m (list list_x) #generowanie macierzy korelacji R na podstawie zmiennych z listy 
+    scalar n = nelem(list_x)
+    matrix R = zeros(n,n)
+    loop i=1..n
+        loop j=1..n
+            R[i,j]=corr(list_x[i],list_x[j])
+        endloop
+    endloop
+    return R
+end function
+
+function matrix R0_m (list list_x, series Y) #generowanie macierzy korelacji R0 na podstawie zmiennych z listy i Y
+    scalar n = nelem(list_x)
+    matrix R0 = zeros (n,1)
+    loop i=1..n
+        R0[i]=corr(list_x[i],Y)
+    endloop
+    return R0
+end function
+
+function string decimal_to_binary(scalar number) #zamiana liczb z postaci dziesiętnej na binarną
+    string bin = ""
+    loop while (number > 0)
+        if (number % 2 == 0)
+            bin = sprintf("0 %s", bin)
+        else
+            bin = sprintf("1 %s", bin)
+        endif
+        number = floor(number / 2)
+    endloop
+    return bin
+end function
+
+function string c_names(list list_x) #dodawanie nazw kolumn 
+    scalar n = nelem(list_x)
+    string names = "H "
+    loop o=1..n
+        names = sprintf("%s X%d",names,o)
+    endloop
+    return names
+end function
+
+function matrix C_m (list list_x) #generowanie macierzy C, która zawiera wszystkie możliwe kombinacje podzbiorów
+    scalar n = nelem(list_x)
+    string str_res = ""
+    loop i = 1..2^n-1
+        res = decimal_to_binary(i)
+        loop while (strlen(res) < strlen(decimal_to_binary(2^n-1)))
+            res = sprintf("0 %s",res)
+        endloop
+        str_res = sprintf("%s\n%s",str_res,res)
+    endloop
+    matrix C
+    sscanf(str_res, "%m", C)
+    cnameset(C, substr(c_names(list_x),3,strlen(c_names(list_x))))
+    return C
+end function
+
+function void Hellwig (list list_x, series Y) #generacja wszystkich macierzy zdefiniowanych wcześniej i obliczenie H dla każdej z kombinacji
+    
+    scalar n= nelem(list_x)
+    matrix R = R_m(list_x)
+    matrix R0 = R0_m(list_x,Y)
+    matrix C = C_m(list_x)
+    matrix H = zeros(2^n-1,1)
+    scalar h = 0
+    scalar H_max = 0
+    loop i = 1..2^n-1
+        loop j = 1..n
+            if (C[i,j] == 1)
+                m = 1
+                if (sum(C[i,])==1)
+                    H[i,1] = R0[j]^2
+                else
+                    loop k=1..n
+                        if (k != j) && (C[i,k]==1)
+                            m = m + abs(R[j,k])
+                        endif
+                    endloop
+                    H[i,1] = H[i,1] + R0[j]^2/m 
+                endif
+                if (H[i,1] > H_max)
+                    temp_comb = "" 
+                    H_max = H[i,1]
+                    loop t=1..n
+                        if (C[i,t] == 1)  
+                            temp_comb = sprintf("%s %s",temp_comb,cnameget(C)[t])
+                        endif
+                    endloop
+                endif
+            endif
+        endloop
+    endloop
+    matrix results = H~C
+    cnameset(results, c_names(list_x))
+    print results
+    print sprintf("Optymalna jest kombinacja%s, H = %f ",temp_comb,H_max)
+end function
+
+Hellwig(x,Y)
+
+# test pominietych zmiennych
+ols Y const X1 X2 X3 X4 X5 --quiet
+omit X4 X5
+
+# model po redukcji zmiennych
+ols Y const X1 X2 X3
+
+# test Test Doornika- Hansena i Testy na normalnosc zostaly przeprowadzone 
+# w oknie z modelem w gretlu
+
+# test na istotność łączna
+ols Y const X1 X2 X3 --quiet
+scalar R2 = $rsq
+scalar df = $df
+scalar F_statystyka = (R2/(1-R2))*(df/2)
+pvalue F 2 df F_statystyka
+
+# test dodanych zmiennych
+ols Y const X1 X2 X3 --quiet
+add X4 X5
+
+# test serii
+ols Y  const X1 X2 X3
+
+series e = $uhat
+runs e --equal
+
+# test Reset
+reset 
+
+# test white'a
+ols Y const X1 X2 X3 --quiet
+modtest --white 
+
+# metoda Cochrane-Orcut
+
+y2 = Y/sqrt(X3)
+nc = const/sqrt(X3)
+x11 = X1/sqrt(X3)
+x12 = X2/sqrt(X3)
+x13 = X3/sqrt(X3)
+
+ols y2 nc x11 x12 x13 
+modtest --white 
+# test chowa z poziomu ekranu głównego, wspóliniowość tak samo
+
+
+# PROGNOZA PUNKTOWA, prognoza dla wartości średnich
+ols y2 nc x11 x12 x13 --vcv --quiet
+matrix x_tau = {1, mean(x11), mean(x12), mean(x13)}
+matrix a = $coeff
+scalar prognoza_punktowa = x_tau*a
+
+# wariancja prognozy
+scalar wariancja_prognozy= x_tau*$vcv*x_tau'+$ess/$df
+# blad prognozy
+scalar blad_prognozy=sqrt(wariancja_prognozy)
+
+#95% przedział ufności dla prognozy
+scalar dolna = prognoza_punktowa-critical(t,$df,0.025)*blad_prognozy
+scalar gorna = prognoza_punktowa+critical(t,$df,0.025)*blad_prognozy
